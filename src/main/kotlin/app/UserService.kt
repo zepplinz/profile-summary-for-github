@@ -1,104 +1,128 @@
-package app
+import { CommitCountUtil } from './util/CommitCountUtil';
+import { Repository, RepositoryCommit } from 'github-api';
+import { LoggerFactory } from 'slf4j';
+import { ConcurrentHashMap } from 'concurrent-hashmap';
+import { IntStream } from 'stream';
+import { CacheService } from './CacheService';
+import { Config } from './Config';
+import { GhService } from './GhService';
 
-import app.util.CommitCountUtil
-import org.eclipse.egit.github.core.Repository
-import org.eclipse.egit.github.core.RepositoryCommit
-import org.slf4j.LoggerFactory
-import java.util.concurrent.ConcurrentHashMap
-import java.util.stream.IntStream
-import kotlin.streams.toList
+type UserProfile = {
+    user: any;
+    quarterCommitCount: any;
+    langRepoCount: Map<string, number>;
+    langStarCount: Map<string, number>;
+    langCommitCount: Map<string, number>;
+    repoCommitCount: Map<string, number>;
+    repoStarCount: Map<string, number>;
+    repoCommitCountDescriptions: Map<string, string | undefined>;
+    repoStarCountDescriptions: Map<string, string | undefined>;
+};
 
-object UserService {
+class UserService {
+    private static readonly pageSize = 100;
+    private static readonly log = LoggerFactory.getLogger('app.UserCtrlKt');
+    private static readonly repo = GhService.repos.getRepository('tipsy', 'profile-summary-for-github');
+    private static readonly watchers = new Set<string>();
+    private static readonly freeRequestCutoff = Config.freeRequestCutoff();
 
-    private const val pageSize = 100
-    private val log = LoggerFactory.getLogger("app.UserCtrlKt")
-    private val repo = GhService.repos.getRepository("tipsy", "profile-summary-for-github")
-    private val watchers = ConcurrentHashMap.newKeySet<String>()
-    private val freeRequestCutoff = Config.freeRequestCutoff()
-
-    fun userExists(user: String): Boolean = try {
-        GhService.users.getUser(user) != null
-    } catch (e: Exception) {
-        false
+    static userExists(user: string): boolean {
+        try {
+            return GhService.users.getUser(user) !== null;
+        } catch (e) {
+            return false;
+        }
     }
 
-    private fun remainingRequests(): Int = GhService.remainingRequests
-    private fun hasFreeRemainingRequests(): Boolean = remainingRequests() > (freeRequestCutoff ?: remainingRequests())
+    private static remainingRequests(): number {
+        return GhService.remainingRequests;
+    }
 
-    fun canLoadUser(user: String): Boolean {
-        val userCacheJson = CacheService.selectJsonFromDb(user)
+    private static hasFreeRemainingRequests(): boolean {
+        return this.remainingRequests() > (this.freeRequestCutoff ?? this.remainingRequests());
+    }
+
+    static canLoadUser(user: string): boolean {
+        const userCacheJson = CacheService.selectJsonFromDb(user);
         return Config.unrestricted()
-            || (userCacheJson != null)
-            || hasFreeRemainingRequests()
-            || (remainingRequests() > 0 && hasStarredRepo(user))
+            || userCacheJson !== null
+            || this.hasFreeRemainingRequests()
+            || (this.remainingRequests() > 0 && this.hasStarredRepo(user));
     }
 
-    fun getUserIfCanLoad(username: String): UserProfile? {
-        val userCacheJson = CacheService.selectJsonFromDb(username)
-        val canLoadUser = Config.unrestricted()
-            || (userCacheJson != null)
-            || hasFreeRemainingRequests()
-            || remainingRequests() > 0 && hasStarredRepo(username)
+    static getUserIfCanLoad(username: string): UserProfile | null {
+        const userCacheJson = CacheService.selectJsonFromDb(username);
+        const canLoadUser = Config.unrestricted()
+            || userCacheJson !== null
+            || this.hasFreeRemainingRequests()
+            || (this.remainingRequests() > 0 && this.hasStarredRepo(username));
 
         if (canLoadUser) {
-            return if (userCacheJson == null) {
-                generateUserProfile(username)
+            if (userCacheJson === null) {
+                return this.generateUserProfile(username);
             } else {
-                CacheService.getUserFromJson(userCacheJson)
+                return CacheService.getUserFromJson(userCacheJson);
             }
         }
 
-        return null
+        return null;
     }
 
-    private fun hasStarredRepo(username: String): Boolean {
-        val login = username.toLowerCase()
-        if (watchers.contains(login)) return true
-        syncWatchers()
-        return watchers.contains(login)
+    private static hasStarredRepo(username: string): boolean {
+        const login = username.toLowerCase();
+        if (this.watchers.has(login)) return true;
+        this.syncWatchers();
+        return this.watchers.has(login);
     }
 
-    fun syncWatchers() {
-        val realWatchers = repo.watchers
-        if (watchers.size < realWatchers) {
-            val startPage = watchers.size / pageSize + 1
-            val lastPage = realWatchers / pageSize + 1
-            if (startPage == lastPage)
-                addAllWatchers(lastPage)
-            else
-                IntStream.rangeClosed(startPage, lastPage).parallel().forEach { page -> addAllWatchers(page) }
+    static syncWatchers() {
+        const realWatchers = this.repo.watchers;
+        if (this.watchers.size < realWatchers) {
+            const startPage = Math.floor(this.watchers.size / this.pageSize) + 1;
+            const lastPage = Math.floor(realWatchers / this.pageSize) + 1;
+            if (startPage === lastPage) {
+                this.addAllWatchers(lastPage);
+            } else {
+                IntStream.rangeClosed(startPage, lastPage).parallel().forEach(page => this.addAllWatchers(page));
+            }
         }
     }
 
-    private fun addAllWatchers(pageNumber: Int) = try {
-        GhService.watchers.pageWatchers(repo, pageNumber, pageSize).first().forEach { watchers.add(it.login.toLowerCase()) }
-    } catch (e: Exception) {
-        log.info("Exception while adding watchers", e)
+    private static addAllWatchers(pageNumber: number) {
+        try {
+            GhService.watchers.pageWatchers(this.repo, pageNumber, this.pageSize).first().forEach(watcher => {
+                this.watchers.add(watcher.login.toLowerCase());
+            });
+        } catch (e) {
+            this.log.info('Exception while adding watchers', e);
+        }
     }
 
-    private fun commitsForRepo(repo: Repository): List<RepositoryCommit> = try {
-        GhService.commits.getCommits(repo)
-    } catch (e: Exception) {
-        listOf()
+    private static commitsForRepo(repo: Repository): RepositoryCommit[] {
+        try {
+            return GhService.commits.getCommits(repo);
+        } catch (e) {
+            return [];
+        }
     }
 
-    private fun generateUserProfile(username: String): UserProfile {
-        val user = GhService.users.getUser(username)
-        val repos = GhService.repos.getRepositories(username).filter { !it.isFork && it.size != 0 }
-        val repoCommits = repos.parallelStream().map { it to commitsForRepo(it).filter { it.author?.login.equals(username, ignoreCase = true) } }.toList().toMap()
-        val langRepoGrouping = repos.groupingBy { (it.language ?: "Unknown") }
+    private static generateUserProfile(username: string): UserProfile {
+        const user = GhService.users.getUser(username);
+        const repos = GhService.repos.getRepositories(username).filter(repo => !repo.isFork && repo.size !== 0);
+        const repoCommits = new Map(repos.map(repo => [repo, this.commitsForRepo(repo).filter(commit => commit.author?.login.toLowerCase() === username.toLowerCase())]));
+        const langRepoGrouping = new Map(repos.map(repo => [repo.language ?? 'Unknown', repo]));
 
-        val quarterCommitCount = CommitCountUtil.getCommitsForQuarters(user, repoCommits)
-        val langRepoCount = langRepoGrouping.eachCount().toList().sortedBy { (_, v) -> -v }.toMap()
-        val langStarCount = langRepoGrouping.fold(0) { acc, repo -> acc + repo.watchers }.toList().filter { (_, v) -> v > 0 }.sortedBy { (_, v) -> -v }.toMap()
-        val langCommitCount = langRepoGrouping.fold(0) { acc, repo -> acc + repoCommits[repo]!!.size }.toList().sortedBy { (_, v) -> -v }.toMap()
-        val repoCommitCount = repoCommits.map { it.key.name to it.value.size }.toList().sortedBy { (_, v) -> -v }.take(10).toMap()
-        val repoStarCount = repos.filter { it.watchers > 0 }.map { it.name to it.watchers }.sortedBy { (_, v) -> -v }.take(10).toMap()
+        const quarterCommitCount = CommitCountUtil.getCommitsForQuarters(user, repoCommits);
+        const langRepoCount = new Map([...langRepoGrouping.entries()].map(([lang, repos]) => [lang, repos.length]).sort((a, b) => b[1] - a[1]));
+        const langStarCount = new Map([...langRepoGrouping.entries()].map(([lang, repos]) => [lang, repos.reduce((acc, repo) => acc + repo.watchers, 0)]).filter(([_, count]) => count > 0).sort((a, b) => b[1] - a[1]));
+        const langCommitCount = new Map([...langRepoGrouping.entries()].map(([lang, repos]) => [lang, repos.reduce((acc, repo) => acc + (repoCommits.get(repo)?.length ?? 0), 0)]).sort((a, b) => b[1] - a[1]));
+        const repoCommitCount = new Map([...repoCommits.entries()].map(([repo, commits]) => [repo.name, commits.length]).sort((a, b) => b[1] - a[1]).slice(0, 10));
+        const repoStarCount = new Map(repos.filter(repo => repo.watchers > 0).map(repo => [repo.name, repo.watchers]).sort((a, b) => b[1] - a[1]).slice(0, 10));
 
-        val repoCommitCountDescriptions = repoCommitCount.map { it.key to repos.find { r -> r.name == it.key }?.description }.toMap()
-        val repoStarCountDescriptions = repoStarCount.map { it.key to repos.find { r -> r.name == it.key }?.description }.toMap()
+        const repoCommitCountDescriptions = new Map([...repoCommitCount.entries()].map(([name, _]) => [name, repos.find(repo => repo.name === name)?.description]));
+        const repoStarCountDescriptions = new Map([...repoStarCount.entries()].map(([name, _]) => [name, repos.find(repo => repo.name === name)?.description]));
 
-        val userProfile = UserProfile(
+        const userProfile: UserProfile = {
             user,
             quarterCommitCount,
             langRepoCount,
@@ -108,10 +132,12 @@ object UserService {
             repoStarCount,
             repoCommitCountDescriptions,
             repoStarCountDescriptions
-        )
+        };
 
-        CacheService.saveInCache(userProfile)
+        CacheService.saveInCache(userProfile);
 
         return userProfile;
     }
 }
+
+export { UserService, UserProfile };
