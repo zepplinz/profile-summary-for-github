@@ -1,34 +1,40 @@
-package app.util
+import { Repository, RepositoryCommit, User } from 'some-github-library';
+import { Instant, OffsetDateTime, ZoneOffset, TemporalAdjusters, IsoFields } from 'some-time-library';
 
-import org.eclipse.egit.github.core.Repository
-import org.eclipse.egit.github.core.RepositoryCommit
-import org.eclipse.egit.github.core.User
-import java.time.Instant
-import java.time.OffsetDateTime
-import java.time.ZoneOffset
-import java.time.ZoneOffset.UTC
-import java.time.temporal.IsoFields
-import java.time.temporal.IsoFields.QUARTER_YEARS
-import java.time.temporal.TemporalAdjusters
-import java.util.*
+type SortedMap<K, V> = Map<K, V>;
 
-object CommitCountUtil {
+class CommitCountUtil {
 
-    fun getCommitsForQuarters(user: User, repoCommits: Map<Repository, List<RepositoryCommit>>): SortedMap<String, Int> {
-        val creation = asInstant(user.createdAt).withDayOfMonth(1)
-        val now = Instant.now().atOffset(UTC).with(TemporalAdjusters.firstDayOfNextMonth())
+    static getCommitsForQuarters(user: User, repoCommits: Map<Repository, RepositoryCommit[]>): SortedMap<string, number> {
+        const creation = this.asInstant(user.createdAt).withDayOfMonth(1);
+        const now = Instant.now().atOffset(ZoneOffset.UTC).with(TemporalAdjusters.firstDayOfNextMonth());
 
-        val quarterBuckets = (0..QUARTER_YEARS.between(creation, now))
-                .associate { yearQuarterFromDate(creation.plus(it, QUARTER_YEARS)) to 0 }
-                .toSortedMap()
+        const quarterBuckets = new Map<string, number>(
+            Array.from({ length: IsoFields.QUARTER_YEARS.between(creation, now) + 1 }, (_, i) => [
+                this.yearQuarterFromDate(creation.plus(i, IsoFields.QUARTER_YEARS)),
+                0
+            ])
+        );
 
-        repoCommits.values.flatten().groupingBy { yearQuarterFromCommit(it) }.eachCountTo(quarterBuckets)
+        repoCommits.forEach(commits => {
+            commits.forEach(commit => {
+                const key = this.yearQuarterFromCommit(commit);
+                quarterBuckets.set(key, (quarterBuckets.get(key) || 0) + 1);
+            });
+        });
 
-        return quarterBuckets
+        return new Map([...quarterBuckets.entries()].sort());
     }
 
-    private fun asInstant(date: Date) = date.toInstant().atOffset(ZoneOffset.UTC)
-    private fun yearQuarterFromCommit(it: RepositoryCommit) = yearQuarterFromDate(asInstant(it.commit.committer.date))
-    private fun yearQuarterFromDate(date: OffsetDateTime) = "${date.year}-Q${date.get(IsoFields.QUARTER_OF_YEAR)}"
+    private static asInstant(date: Date): OffsetDateTime {
+        return OffsetDateTime.ofInstant(date.toInstant(), ZoneOffset.UTC);
+    }
 
+    private static yearQuarterFromCommit(commit: RepositoryCommit): string {
+        return this.yearQuarterFromDate(this.asInstant(commit.commit.committer.date));
+    }
+
+    private static yearQuarterFromDate(date: OffsetDateTime): string {
+        return `${date.year}-Q${date.get(IsoFields.QUARTER_OF_YEAR)}`;
+    }
 }
