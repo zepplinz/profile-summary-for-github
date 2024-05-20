@@ -1,26 +1,35 @@
-package app
-
-object Config {
-
+// Define a type for the environment variables
+type EnvironmentVariables = { [key: string]: string | undefined };
+// Define a function to get environment variables
+function getEnvironmentVariable(name: string): string | undefined {
+    return process.env[name.toUpperCase().replace("-", "_")];
+}
+// Define the Config object
+const Config = {
     // Get port from Heroku, or return null (localhost)
-    fun getPort() = getHerokuProperty("port")?.let {
-        Integer.parseInt(it)
-    }
-
+    getPort: (): number | null => {
+        const port = getEnvironmentVariable("port");
+        return port ? parseInt(port) : null;
+    },
     // Get 'api-tokens' from Heroku/System, or return null if not set
-    fun getApiTokens(): String? = getProperty("api-tokens")
-
+    getApiTokens: (): string | null => {
+        return getProperty("api-tokens");
+    },
     // Get 'unrestricted' state from Heroku/System, or return null if not set
-    fun unrestricted(): Boolean = getProperty("unrestricted")?.toBoolean() == true
-
+    unrestricted: (): boolean => {
+        return getProperty("unrestricted")?.toLowerCase() === "true";
+    },
     // Get 'gtm-id' from Heroku/System, or return null if not set
-    fun getGtmId(): String? = getProperty("gtm-id")
-
+    getGtmId: (): string | null => {
+        return getProperty("gtm-id");
+    },
     // Get 'star-bypass' from Heroku/System, or return null if not stored
-    fun freeRequestCutoff() = getProperty("free-requests-cutoff")?.let { Integer.parseInt(it) }
-
-    private fun getProperty(name: String): String? = getHerokuProperty(name) ?: System.getProperty(name)
-
-    private fun getHerokuProperty(envStr: String) = ProcessBuilder().environment()[envStr.toUpperCase().replace("-", "_")]
-
+    freeRequestCutoff: (): number | null => {
+        const cutoff = getProperty("free-requests-cutoff");
+        return cutoff ? parseInt(cutoff) : null;
+    }
+};
+// Define a function to get properties from Heroku/System
+function getProperty(name: string): string | null {
+    return getEnvironmentVariable(name) || process.env[name] || null;
 }
